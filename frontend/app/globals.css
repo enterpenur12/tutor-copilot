@@ -1,17 +1,17 @@
 @import "tailwindcss";
 
 :root {
-  --bg: #0f1115;
-  --bg-elev: #141922;
-  --bg-soft: #1b2230;
-  --line: rgba(148, 163, 184, 0.18);
-  --text: #e5e7eb;
-  --muted: #9aa4b2;
-  --accent: #2b5fd9;
-  --accent-strong: #2b5fd9;
+  --bg: #0b0f14;
+  --bg-elev: #121722;
+  --bg-soft: #191f2b;
+  --line: rgba(148, 163, 184, 0.16);
+  --text: #eef2f7;
+  --muted: #a3adba;
+  --accent: #2f6bff;
+  --accent-strong: #2f6bff;
   --warn: #f59e0b;
-  --shadow: rgba(6, 8, 12, 0.5);
-  --panel-glow: rgba(43, 95, 217, 0.08);
+  --shadow: rgba(4, 6, 10, 0.55);
+  --panel-glow: rgba(47, 107, 255, 0.08);
 }
 
 @theme inline {
@@ -27,8 +27,8 @@
 body {
   margin: 0;
   background:
-    radial-gradient(1200px circle at 10% -10%, rgba(43, 95, 217, 0.08), transparent 55%),
-    radial-gradient(1000px circle at 90% -20%, rgba(148, 163, 184, 0.06), transparent 60%),
+    radial-gradient(1200px circle at 10% -10%, rgba(47, 107, 255, 0.08), transparent 55%),
+    radial-gradient(1000px circle at 90% -20%, rgba(148, 163, 184, 0.05), transparent 60%),
     var(--bg);
   color: var(--text);
   font-family: var(--font-inter), "Inter", system-ui, -apple-system, sans-serif;
@@ -57,7 +57,7 @@ textarea {
     linear-gradient(var(--line) 1px, transparent 1px),
     linear-gradient(90deg, var(--line) 1px, transparent 1px);
   background-size: 48px 48px;
-  opacity: 0.08;
+  opacity: 0.06;
   pointer-events: none;
 }
 
@@ -122,8 +122,8 @@ textarea {
   flex-wrap: wrap;
   padding: 6px;
   border-radius: 999px;
-  background: rgba(15, 20, 30, 0.7);
-  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(12, 16, 24, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.12);
 }
 
 .tab {
@@ -136,10 +136,10 @@ textarea {
 }
 
 .tab--active {
-  border-color: rgba(43, 95, 217, 0.45);
+  border-color: rgba(47, 107, 255, 0.45);
   color: var(--accent);
-  background: rgba(43, 95, 217, 0.12);
-  box-shadow: 0 0 0 1px rgba(43, 95, 217, 0.2) inset;
+  background: rgba(47, 107, 255, 0.12);
+  box-shadow: 0 0 0 1px rgba(47, 107, 255, 0.2) inset;
 }
 
 .hud__grid {
@@ -153,7 +153,7 @@ textarea {
     linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0)),
     var(--bg-elev);
   border: 1px solid var(--line);
-  border-top-color: rgba(43, 95, 217, 0.25);
+  border-top-color: rgba(47, 107, 255, 0.22);
   border-radius: 16px;
   padding: 22px;
   box-shadow:
@@ -202,7 +202,7 @@ textarea {
   gap: 12px;
   margin-bottom: 18px;
   padding-bottom: 10px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
 }
 
 .panel__title {
@@ -249,8 +249,8 @@ textarea {
 }
 
 .hud__textarea:focus {
-  outline: 2px solid rgba(43, 95, 217, 0.35);
-  border-color: rgba(43, 95, 217, 0.45);
+  outline: 2px solid rgba(47, 107, 255, 0.35);
+  border-color: rgba(47, 107, 255, 0.45);
 }
 
 .button {
@@ -289,7 +289,7 @@ textarea {
 .tab:focus-visible,
 .select:focus-visible,
 .hud__textarea:focus-visible {
-  outline: 2px solid rgba(43, 95, 217, 0.6);
+  outline: 2px solid rgba(47, 107, 255, 0.6);
   outline-offset: 2px;
 }
 
@@ -299,7 +299,7 @@ textarea {
 .button--secondary:active:not(:disabled),
 .button--ghost:active:not(:disabled) {
   transform: translateY(1px);
-  box-shadow: 0 0 0 2px rgba(43, 95, 217, 0.35);
+  box-shadow: 0 0 0 2px rgba(47, 107, 255, 0.35);
 }
 
 .dropzone {
@@ -315,7 +315,7 @@ textarea {
 }
 
 .dropzone--active {
-  border-color: rgba(43, 95, 217, 0.55);
+  border-color: rgba(47, 107, 255, 0.55);
 }
 
 .dropzone__hint {
@@ -334,7 +334,7 @@ textarea {
 }
 
 .select:focus-visible {
-  outline: 2px solid rgba(43, 95, 217, 0.6);
+  outline: 2px solid rgba(47, 107, 255, 0.6);
   outline-offset: 2px;
 }
 
@@ -404,7 +404,7 @@ textarea {
   border-radius: 12px;
   border: 1px solid rgba(245, 158, 11, 0.35);
   background: rgba(245, 158, 11, 0.12);
-  color: #fbbf24;
+  color: #f7c66a;
   margin-bottom: 12px;
 }
 
@@ -440,7 +440,7 @@ textarea {
 }
 
 .score-card--change {
-  border-color: rgba(43, 95, 217, 0.4);
+  border-color: rgba(47, 107, 255, 0.4);
 }
 
 .report__section h3 {
