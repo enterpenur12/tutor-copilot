@@ -45,8 +45,6 @@ textarea {
 .hud {
   min-height: 100vh;
   padding: 36px clamp(18px, 4vw, 64px) 96px;
-  max-width: 1240px;
-  margin: 0 auto;
   position: relative;
   overflow: hidden;
 }
