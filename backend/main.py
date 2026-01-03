@@ -1,11 +1,17 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-@app.get("/")
-def root():
-    return {"message": "Backend is working"}
+# allow frontend to call backend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # later we lock this
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"message": "Backend is working"}
+
