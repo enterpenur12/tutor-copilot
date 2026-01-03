@@ -25,7 +25,6 @@ examples from the neighborhood program. The body paragraphs explain why the plan
 practical, and the conclusion restates the claim with a clear next step.`;
 
 const RUBRIC_PRESETS = [
-  { id: "custom", label: "Custom", value: null },
   { id: "blank", label: "Blank", value: "" },
   { id: "sample", label: "Sample rubric", value: SAMPLE_RUBRIC },
 ];
@@ -142,7 +141,7 @@ function makeId() {
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<"feedback" | "compare">("feedback");
-  const [rubricPreset, setRubricPreset] = useState("custom");
+  const [rubricPreset, setRubricPreset] = useState("blank");
   const [rubric, setRubric] = useState("");
   const [studentWork, setStudentWork] = useState("");
   const [output, setOutput] = useState("");
@@ -196,15 +195,12 @@ export default function Home() {
 
   function updateRubric(nextValue: string) {
     setRubric(nextValue);
-    if (rubricPreset !== "custom") {
-      setRubricPreset("custom");
-    }
   }
 
   function applyRubricPreset(nextPreset: string) {
     setRubricPreset(nextPreset);
     const preset = RUBRIC_PRESETS.find((item) => item.id === nextPreset);
-    if (preset && preset.value !== null) {
+    if (preset) {
       setRubric(preset.value);
     }
   }
@@ -314,7 +310,7 @@ export default function Home() {
   function restoreComparison(entry: ComparisonEntry) {
     setActiveTab("compare");
     setRubric(entry.rubric);
-    setRubricPreset("custom");
+    setRubricPreset("blank");
     setTone(entry.tone);
     setDraftBefore(entry.draft_before);
     setDraftAfter(entry.draft_after);
