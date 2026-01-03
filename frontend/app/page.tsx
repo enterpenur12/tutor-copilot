@@ -30,6 +30,66 @@ async function readFileAsText(file: File) {
   });
 }
 
+function stripCodeFences(text: string) {
+  return text.replace(/```json/gi, "").replace(/```/g, "").trim();
+}
+
+function cleanText(text: string) {
+  return text
+    .replace(/\\n/g, "\n")
+    .replace(/\\r/g, "\r")
+    .replace(/\\t/g, "\t")
+    .replace(/\\\//g, "/")
+    .trim();
+}
+
+function formatList(title: string, items: unknown) {
+  if (!Array.isArray(items) || items.length === 0) return "";
+  const lines = items.map((item) => `- ${String(item)}`);
+  return `${title}:\n${lines.join("\n")}`;
+}
+
+function formatFeedback(payload: unknown) {
+  if (!payload || typeof payload !== "object") return "";
+  const data = payload as Record<string, unknown>;
+  const parts = [];
+  if (typeof data.score === "number" || typeof data.score === "string") {
+    parts.push(`Score: ${data.score}`);
+  }
+  const strengths = formatList("Strengths", data.strengths);
+  if (strengths) parts.push(strengths);
+  const weaknesses = formatList("Weaknesses", data.weaknesses);
+  if (weaknesses) parts.push(weaknesses);
+  const suggestions = formatList("Suggestions", data.suggestions);
+  if (suggestions) parts.push(suggestions);
+  return parts.join("\n\n");
+}
+
+function normalizeResponse(data: unknown) {
+  if (!data) return "No response returned.";
+  if (typeof data === "string") return cleanText(data);
+
+  if (typeof data === "object") {
+    const record = data as Record<string, unknown>;
+    if (typeof record.feedback === "string") {
+      const candidate = stripCodeFences(record.feedback);
+      try {
+        const parsed = JSON.parse(candidate);
+        const formatted = formatFeedback(parsed);
+        return formatted || JSON.stringify(parsed, null, 2);
+      } catch (error) {
+        return cleanText(record.feedback);
+      }
+    }
+
+    const formatted = formatFeedback(record);
+    if (formatted) return formatted;
+    return JSON.stringify(record, null, 2);
+  }
+
+  return String(data);
+}
+
 export default function Home() {
   const [rubric, setRubric] = useState("");
   const [studentWork, setStudentWork] = useState("");
@@ -65,11 +125,33 @@ export default function Home() {
       });
 
       const data = await res.json();
-      setOutput(JSON.stringify(data, null, 2));
+      setOutput(normalizeResponse(data));
     } catch (e) {
       setOutput("Failed to fetch. Try again in 30 seconds.");
     } finally {
       setIsRunning(false);
+    }
+  }
+
+  async function handleFileUpload(target: "rubric" | "student", file: File) {
+    if (file.size > MAX_FILE_BYTES) {
+      setUploadMessage(
+        `File too large. Keep it under ${Math.round(
+          MAX_FILE_BYTES / 1024
+        )}KB.`
+      );
+      return;
+    }
+    try {
+      const text = await readFileAsText(file);
+      if (target === "rubric") {
+        setRubric(text);
+      } else {
+        setStudentWork(text);
+      }
+      setUploadMessage(`Loaded ${file.name} into ${target}.`);
+    } catch (error) {
+      setUploadMessage("File read failed. Try again.");
     }
   }
 
@@ -139,7 +221,7 @@ export default function Home() {
           <div className="panel__head">
             <div className="panel__title">File intake + quick tools</div>
             <div className="panel__meta">
-              Max {Math.round(MAX_FILE_BYTES / 1024)}KB · .txt .md .csv .json
+              Target: {uploadTarget} · Max {Math.round(MAX_FILE_BYTES / 1024)}KB
             </div>
           </div>
           <div
@@ -154,25 +236,7 @@ export default function Home() {
               setDropActive(false);
               const file = event.dataTransfer.files?.[0];
               if (!file) return;
-              if (file.size > MAX_FILE_BYTES) {
-                setUploadMessage(
-                  `File too large. Keep it under ${Math.round(
-                    MAX_FILE_BYTES / 1024
-                  )}KB.`
-                );
-                return;
-              }
-              try {
-                const text = await readFileAsText(file);
-                if (uploadTarget === "rubric") {
-                  setRubric(text);
-                } else {
-                  setStudentWork(text);
-                }
-                setUploadMessage(`Loaded ${file.name} into ${uploadTarget}.`);
-              } catch (error) {
-                setUploadMessage("File read failed. Try again.");
-              }
+              await handleFileUpload(uploadTarget, file);
             }}
           >
             <div>
@@ -187,18 +251,20 @@ export default function Home() {
             </div>
           </div>
           <div style={{ marginTop: 16 }} className="action-row">
-            <select
-              className="select"
-              value={uploadTarget}
-              onChange={(event) =>
-                setUploadTarget(event.target.value as "rubric" | "student")
-              }
+            <button
+              className={`button button--ghost`}
+              onClick={() => setUploadTarget("rubric")}
             >
-              <option value="rubric">Send to rubric</option>
-              <option value="student">Send to student work</option>
-            </select>
+              Route drops to rubric
+            </button>
+            <button
+              className={`button button--ghost`}
+              onClick={() => setUploadTarget("student")}
+            >
+              Route drops to student work
+            </button>
             <label className="button button--secondary">
-              Upload file
+              Upload to rubric
               <input
                 type="file"
                 accept=".txt,.md,.csv,.json"
@@ -206,25 +272,20 @@ export default function Home() {
                 onChange={async (event) => {
                   const file = event.target.files?.[0];
                   if (!file) return;
-                  if (file.size > MAX_FILE_BYTES) {
-                    setUploadMessage(
-                      `File too large. Keep it under ${Math.round(
-                        MAX_FILE_BYTES / 1024
-                      )}KB.`
-                    );
-                    return;
-                  }
-                  try {
-                    const text = await readFileAsText(file);
-                    if (uploadTarget === "rubric") {
-                      setRubric(text);
-                    } else {
-                      setStudentWork(text);
-                    }
-                    setUploadMessage(`Loaded ${file.name} into ${uploadTarget}.`);
-                  } catch (error) {
-                    setUploadMessage("File read failed. Try again.");
-                  }
+                  await handleFileUpload("rubric", file);
+                }}
+              />
+            </label>
+            <label className="button button--secondary">
+              Upload to student work
+              <input
+                type="file"
+                accept=".txt,.md,.csv,.json"
+                hidden
+                onChange={async (event) => {
+                  const file = event.target.files?.[0];
+                  if (!file) return;
+                  await handleFileUpload("student", file);
                 }}
               />
             </label>
