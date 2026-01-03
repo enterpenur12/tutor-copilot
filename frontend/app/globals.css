@@ -11,6 +11,7 @@
   --accent-strong: #2b5fd9;
   --warn: #f59e0b;
   --shadow: rgba(6, 8, 12, 0.5);
+  --panel-glow: rgba(43, 95, 217, 0.08);
 }
 
 @theme inline {
@@ -25,7 +26,10 @@
 
 body {
   margin: 0;
-  background: var(--bg);
+  background:
+    radial-gradient(1200px circle at 10% -10%, rgba(43, 95, 217, 0.08), transparent 55%),
+    radial-gradient(1000px circle at 90% -20%, rgba(148, 163, 184, 0.06), transparent 60%),
+    var(--bg);
   color: var(--text);
   font-family: var(--font-inter), "Inter", system-ui, -apple-system, sans-serif;
 }
@@ -41,8 +45,37 @@ textarea {
 .hud {
   min-height: 100vh;
   padding: 36px clamp(18px, 4vw, 64px) 96px;
+  max-width: 1240px;
+  margin: 0 auto;
   position: relative;
   overflow: hidden;
+}
+
+.hud::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px);
+  background-size: 48px 48px;
+  opacity: 0.08;
+  pointer-events: none;
+}
+
+.hud::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 10%, rgba(15, 17, 21, 0) 0%, rgba(15, 17, 21, 0.6) 70%);
+  pointer-events: none;
+}
+
+.hud__header,
+.hud__grid,
+.tabs {
+  position: relative;
+  z-index: 1;
 }
 
 .hud__header {
@@ -69,6 +102,7 @@ textarea {
   place-items: center;
   font-weight: 700;
   letter-spacing: 0.04em;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06) inset, 0 8px 18px rgba(0, 0, 0, 0.35);
 }
 
 .brand h1 {
@@ -88,6 +122,10 @@ textarea {
   gap: 12px;
   margin-bottom: 28px;
   flex-wrap: wrap;
+  padding: 6px;
+  border-radius: 999px;
+  background: rgba(15, 20, 30, 0.7);
+  border: 1px solid rgba(148, 163, 184, 0.14);
 }
 
 .tab {
@@ -103,6 +141,7 @@ textarea {
   border-color: rgba(43, 95, 217, 0.45);
   color: var(--accent);
   background: rgba(43, 95, 217, 0.12);
+  box-shadow: 0 0 0 1px rgba(43, 95, 217, 0.2) inset;
 }
 
 .hud__grid {
@@ -112,11 +151,16 @@ textarea {
 }
 
 .panel {
-  background: var(--bg-elev);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0)),
+    var(--bg-elev);
   border: 1px solid var(--line);
+  border-top-color: rgba(43, 95, 217, 0.25);
   border-radius: 16px;
   padding: 22px;
-  box-shadow: 0 10px 24px var(--shadow);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.03) inset,
+    0 12px 28px var(--shadow);
 }
 
 .panel--input {
@@ -159,6 +203,8 @@ textarea {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 18px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
 }
 
 .panel__title {
@@ -201,6 +247,7 @@ textarea {
   resize: vertical;
   font-size: 0.98rem;
   line-height: 1.6;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.02) inset;
 }
 
 .hud__textarea:focus {
@@ -225,6 +272,7 @@ textarea {
 .button--primary {
   background: var(--accent);
   color: #ffffff;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05) inset, 0 10px 18px rgba(0, 0, 0, 0.35);
 }
 
 .button--secondary {
@@ -265,6 +313,7 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.02) inset;
 }
 
 .dropzone--active {
@@ -283,6 +332,7 @@ textarea {
   padding: 10px 12px;
   font-size: 0.95rem;
   color: var(--text);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.02) inset;
 }
 
 .select:focus-visible {
@@ -297,6 +347,7 @@ textarea {
   padding: 14px;
   border: 1px solid var(--line);
   overflow: auto;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.02) inset;
 }
 
 .output__pre {
@@ -376,6 +427,7 @@ textarea {
   border: 1px solid var(--line);
   background: var(--bg-soft);
   padding: 12px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.02) inset;
 }
 
 .score-card__label {
@@ -415,6 +467,7 @@ textarea {
   background: var(--bg-soft);
   border-radius: 12px;
   padding: 12px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.02) inset;
 }
 
 .next-step__title {
@@ -442,6 +495,7 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.02) inset;
 }
 
 .history-card__title {
