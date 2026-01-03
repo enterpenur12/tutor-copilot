@@ -215,7 +215,11 @@ export default function Home() {
   }
 
   async function runAI() {
-    setOutput("Running...");
+    if (!rubric.trim() || !studentWork.trim()) {
+      setOutput("Please add both a rubric and student work to continue.");
+      return;
+    }
+    setOutput("Analyzing draft...");
     setIsRunning(true);
 
     try {
@@ -231,7 +235,7 @@ export default function Home() {
       const data = await res.json();
       setOutput(normalizeResponse(data));
     } catch (e) {
-      setOutput("Failed to fetch. Try again in 30 seconds.");
+      setOutput("Something went wrong. Please try again shortly.");
     } finally {
       setIsRunning(false);
     }
@@ -241,6 +245,11 @@ export default function Home() {
     setIsComparing(true);
     setCompareError("");
     setComparisonResult(null);
+    if (!rubric.trim() || !draftBefore.trim() || !draftAfter.trim()) {
+      setCompareError("Please add a rubric, draft before, and draft after.");
+      setIsComparing(false);
+      return;
+    }
 
     try {
       const res = await fetch(`${BACKEND}/compare`, {
@@ -256,9 +265,7 @@ export default function Home() {
 
       const payload = await res.json();
       if (!payload?.ok) {
-        const message =
-          payload?.error?.message || "Comparison failed. Please try again.";
-        setCompareError(message);
+        setCompareError("We couldn't generate a comparison. Please try again.");
         return;
       }
 
@@ -276,7 +283,7 @@ export default function Home() {
       const nextHistory = [entry, ...comparisonHistory].slice(0, 25);
       persistComparisonHistory(nextHistory);
     } catch (error) {
-      setCompareError("Failed to fetch. Try again in 30 seconds.");
+      setCompareError("Something went wrong. Please try again shortly.");
     } finally {
       setIsComparing(false);
     }
@@ -663,7 +670,7 @@ export default function Home() {
                   onClick={compareDrafts}
                   disabled={compareDisabled}
                 >
-                  {isComparing ? "Comparing..." : "Compare"}
+                  {isComparing ? "Comparing revisions..." : "Compare"}
                 </button>
               </div>
             </div>
@@ -716,10 +723,10 @@ export default function Home() {
 
           <div className="panel panel--span-7">
             <div className="panel__head">
-              <div className="panel__title">Output</div>
+              <div className="panel__title">Comparison report</div>
             </div>
             {isComparing ? (
-              <div className="state">Comparing drafts...</div>
+              <div className="state">Comparing revisions...</div>
             ) : null}
             {compareError ? <div className="alert">{compareError}</div> : null}
             {comparisonResult ? (
