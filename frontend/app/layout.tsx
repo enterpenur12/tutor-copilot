@@ -15,7 +15,7 @@ const spaceMono = Space_Mono({
 
 export const metadata: Metadata = {
   title: "Tutor Copilot",
-  description: "Sleek HUD for rubric-driven tutoring feedback.",
+  description: "Rubric-aligned feedback and revision comparison for student drafts.",
 };
 
 export default function RootLayout({

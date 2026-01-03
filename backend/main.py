@@ -1,4 +1,7 @@
+import json
 import os
+from typing import Literal
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -20,6 +23,13 @@ app.add_middleware(
 class RunRequest(BaseModel):
     rubric: str
     student_work: str
+
+
+class CompareRequest(BaseModel):
+    rubric: str
+    draft_before: str
+    draft_after: str
+    tone: Literal["strict", "balanced", "friendly"]
 
 @app.get("/health")
 def health():
@@ -112,3 +122,130 @@ Return ONLY valid JSON with keys:
     )
 
     return {"feedback": response.choices[0].message.content}
+
+
+def _strip_code_fences(text: str) -> str:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.replace("```json", "").replace("```", "").strip()
+    return cleaned
+
+
+def _parse_json_once(raw_text: str) -> dict:
+    cleaned = _strip_code_fences(raw_text)
+    return json.loads(cleaned)
+
+
+def _normalize_compare_payload(data: dict) -> dict:
+    def clamp_score(value: float) -> float:
+        return max(65.0, min(100.0, value))
+
+    before = clamp_score(float(data.get("before_score", 65)))
+    after = clamp_score(float(data.get("after_score", before)))
+    improvements = [
+        str(item) for item in data.get("improvements", []) if str(item).strip()
+    ]
+    remaining_gaps = [
+        str(item) for item in data.get("remaining_gaps", []) if str(item).strip()
+    ]
+    next_steps = []
+    for item in data.get("next_steps", []) or []:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title", "")).strip()
+        details = str(item.get("details", "")).strip()
+        if title or details:
+            next_steps.append({"title": title or "Next step", "details": details})
+    summary = str(data.get("summary", "")).strip()
+
+    return {
+        "before_score": before,
+        "after_score": after,
+        "score_change": after - before,
+        "improvements": improvements,
+        "remaining_gaps": remaining_gaps,
+        "next_steps": next_steps,
+        "summary": summary,
+    }
+
+
+def _build_compare_prompt(req: CompareRequest, json_only: bool) -> str:
+    strict_json = ""
+    if json_only:
+        strict_json = "\nReturn ONLY valid JSON. Do not include markdown or commentary.\n"
+
+    return f"""
+You are an experienced high school teacher providing rubric-guided feedback.
+Apply professional leniency: judge holistically, not as a checklist.
+
+Tone: {req.tone}
+
+Task:
+- Score BOTH drafts (before and after) using the rubric as a guide.
+- Scores must be between 65 and 100. Never go below 65.
+- Compare the drafts to identify improvements and remaining gaps.
+- Do NOT rewrite or edit the drafts.
+- Do NOT generate a full revised essay.
+
+Rubric:
+{req.rubric}
+
+Draft BEFORE:
+{req.draft_before}
+
+Draft AFTER:
+{req.draft_after}
+
+Return JSON with this shape:
+{{
+  "before_score": number,
+  "after_score": number,
+  "score_change": number,
+  "improvements": string[],
+  "remaining_gaps": string[],
+  "next_steps": [{{"title": string, "details": string}}],
+  "summary": string
+}}
+{strict_json}
+""".strip()
+
+
+@app.post("/compare")
+def compare(req: CompareRequest):
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        return {
+            "ok": False,
+            "error": {
+                "message": "OPENAI_API_KEY missing in Render environment.",
+                "code": "missing_api_key",
+            },
+        }
+
+    client = OpenAI(api_key=api_key)
+
+    def request_compare(json_only: bool) -> dict:
+        prompt = _build_compare_prompt(req, json_only=json_only)
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+        )
+        return _parse_json_once(response.choices[0].message.content)
+
+    try:
+        raw_data = request_compare(json_only=False)
+    except Exception:
+        try:
+            raw_data = request_compare(json_only=True)
+        except Exception:
+            return {
+                "ok": False,
+                "error": {
+                    "message": "Model response was not valid JSON.",
+                    "code": "invalid_model_json",
+                },
+            }
+
+    normalized = _normalize_compare_payload(raw_data if isinstance(raw_data, dict) else {})
+    return {"ok": True, "data": normalized}
