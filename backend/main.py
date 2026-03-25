@@ -3,6 +3,8 @@ import json
 import os
 import time
 from collections import defaultdict, deque
+from pathlib import Path
+from threading import RLock
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Request
@@ -21,6 +23,8 @@ RATE_LIMIT_REQUESTS_PER_WINDOW = 8
 DAILY_LIMIT_WINDOW_SECONDS = 86400
 DAILY_LIMIT_REQUESTS = 120
 REQUEST_TIMEOUT_SECONDS = 45
+ANALYTICS_ID_MAX_LENGTH = 128
+ANALYTICS_STATE_PATH = Path(__file__).with_name("analytics_state.json")
 TRUSTED_ORIGINS = [
     "https://tutor-copilot.vercel.app",
     "http://localhost:3000",
@@ -92,9 +96,45 @@ class CompareRequest(InputModel):
 
 class HelpfulnessRequest(BaseModel):
     helpful: bool
+    event_id: str = Field(..., min_length=1, max_length=ANALYTICS_ID_MAX_LENGTH)
 
     class Config:
         extra = "forbid"
+
+    @validator("event_id")
+    def validate_event_id(cls, value: str):
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Event ID is required.")
+        return normalized
+
+
+class BrowserRegistrationRequest(BaseModel):
+    browser_id: str = Field(..., min_length=1, max_length=ANALYTICS_ID_MAX_LENGTH)
+
+    class Config:
+        extra = "forbid"
+
+    @validator("browser_id")
+    def validate_browser_id(cls, value: str):
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Browser ID is required.")
+        return normalized
+
+
+class AnalyticsEventRequest(BaseModel):
+    event_id: str = Field(..., min_length=1, max_length=ANALYTICS_ID_MAX_LENGTH)
+
+    class Config:
+        extra = "forbid"
+
+    @validator("event_id")
+    def validate_event_id(cls, value: str):
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Event ID is required.")
+        return normalized
 
 
 class InMemoryRateLimiter:
@@ -116,12 +156,148 @@ class InMemoryRateLimiter:
 
 short_window_limiter = InMemoryRateLimiter()
 daily_limiter = InMemoryRateLimiter()
-analytics_state = {
-    "uniqueUsers": 0,
-    "essaysReviewed": 0,
-    "helpfulYes": 0,
-    "helpfulNo": 0,
-}
+
+
+def _normalize_count(value: object) -> int:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        return max(0, int(value))
+    return 0
+
+
+class AnalyticsStore:
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._lock = RLock()
+        self._state = self._load()
+
+    def _default_state(self) -> dict:
+        return {
+            "uniqueUsers": 0,
+            "essaysReviewed": 0,
+            "helpfulYes": 0,
+            "helpfulNo": 0,
+            "_browserIds": set(),
+            "_essayEventIds": set(),
+            "_helpfulnessEventIds": set(),
+        }
+
+    def _normalize_id_collection(self, value: object) -> set[str]:
+        if not isinstance(value, list):
+            return set()
+        normalized: set[str] = set()
+        for item in value:
+            if not isinstance(item, str):
+                continue
+            cleaned = item.strip()
+            if cleaned:
+                normalized.add(cleaned[:ANALYTICS_ID_MAX_LENGTH])
+        return normalized
+
+    def _normalize_state(self, raw: object) -> dict:
+        state = self._default_state()
+        if not isinstance(raw, dict):
+            return state
+
+        state["uniqueUsers"] = _normalize_count(raw.get("uniqueUsers"))
+        state["essaysReviewed"] = _normalize_count(raw.get("essaysReviewed"))
+        state["helpfulYes"] = _normalize_count(raw.get("helpfulYes"))
+        state["helpfulNo"] = _normalize_count(raw.get("helpfulNo"))
+        state["_browserIds"] = self._normalize_id_collection(
+            raw.get("_browserIds", raw.get("browserIds"))
+        )
+        state["_essayEventIds"] = self._normalize_id_collection(
+            raw.get("_essayEventIds", raw.get("essayEventIds"))
+        )
+        state["_helpfulnessEventIds"] = self._normalize_id_collection(
+            raw.get("_helpfulnessEventIds", raw.get("helpfulnessEventIds"))
+        )
+        state["uniqueUsers"] = max(state["uniqueUsers"], len(state["_browserIds"]))
+        state["essaysReviewed"] = max(
+            state["essaysReviewed"], len(state["_essayEventIds"])
+        )
+        total_helpfulness_events = len(state["_helpfulnessEventIds"])
+        total_helpfulness_count = state["helpfulYes"] + state["helpfulNo"]
+        if total_helpfulness_count < total_helpfulness_events:
+            state["helpfulNo"] += total_helpfulness_events - total_helpfulness_count
+        return state
+
+    def _serialize(self, state: dict) -> dict:
+        return {
+            "uniqueUsers": state["uniqueUsers"],
+            "essaysReviewed": state["essaysReviewed"],
+            "helpfulYes": state["helpfulYes"],
+            "helpfulNo": state["helpfulNo"],
+            "browserIds": sorted(state["_browserIds"]),
+            "essayEventIds": sorted(state["_essayEventIds"]),
+            "helpfulnessEventIds": sorted(state["_helpfulnessEventIds"]),
+        }
+
+    def _write_unlocked(self, state: dict) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = self._path.with_suffix(".tmp")
+        with temp_path.open("w", encoding="utf-8") as handle:
+            json.dump(self._serialize(state), handle, indent=2, sort_keys=True)
+        temp_path.replace(self._path)
+
+    def _load(self) -> dict:
+        if not self._path.exists():
+            state = self._default_state()
+            self._write_unlocked(state)
+            return state
+
+        try:
+            with self._path.open("r", encoding="utf-8") as handle:
+                raw = json.load(handle)
+        except (OSError, json.JSONDecodeError):
+            raw = {}
+
+        state = self._normalize_state(raw)
+        self._write_unlocked(state)
+        return state
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return {
+                "uniqueUsers": self._state["uniqueUsers"],
+                "essaysReviewed": self._state["essaysReviewed"],
+                "helpfulYes": self._state["helpfulYes"],
+                "helpfulNo": self._state["helpfulNo"],
+            }
+
+    def register_browser(self, browser_id: str) -> dict:
+        with self._lock:
+            if browser_id in self._state["_browserIds"]:
+                return self.snapshot()
+            self._state["_browserIds"].add(browser_id)
+            self._state["uniqueUsers"] = len(self._state["_browserIds"])
+            self._write_unlocked(self._state)
+            return self.snapshot()
+
+    def register_essay_review(self, event_id: str) -> dict:
+        with self._lock:
+            if event_id in self._state["_essayEventIds"]:
+                return self.snapshot()
+            self._state["_essayEventIds"].add(event_id)
+            self._state["essaysReviewed"] = len(self._state["_essayEventIds"])
+            self._write_unlocked(self._state)
+            return self.snapshot()
+
+    def register_helpfulness(self, event_id: str, helpful: bool) -> dict:
+        with self._lock:
+            if event_id in self._state["_helpfulnessEventIds"]:
+                return self.snapshot()
+            self._state["_helpfulnessEventIds"].add(event_id)
+            if helpful:
+                self._state["helpfulYes"] += 1
+            else:
+                self._state["helpfulNo"] += 1
+            self._write_unlocked(self._state)
+            return self.snapshot()
+
+
+analytics_store = AnalyticsStore(ANALYTICS_STATE_PATH)
 
 
 def _get_client_token(request: Request) -> str:
@@ -378,28 +554,22 @@ def health():
 
 @app.get("/analytics")
 def get_analytics():
-    return analytics_state
+    return analytics_store.snapshot()
 
 
 @app.post("/analytics/register-user")
-def register_user():
-    analytics_state["uniqueUsers"] += 1
-    return analytics_state
+def register_user(req: BrowserRegistrationRequest):
+    return analytics_store.register_browser(req.browser_id)
 
 
 @app.post("/analytics/essay-reviewed")
-def register_essay_review():
-    analytics_state["essaysReviewed"] += 1
-    return analytics_state
+def register_essay_review(req: AnalyticsEventRequest):
+    return analytics_store.register_essay_review(req.event_id)
 
 
 @app.post("/analytics/helpfulness")
 def register_helpfulness(req: HelpfulnessRequest):
-    if req.helpful:
-        analytics_state["helpfulYes"] += 1
-    else:
-        analytics_state["helpfulNo"] += 1
-    return analytics_state
+    return analytics_store.register_helpfulness(req.event_id, req.helpful)
 
 
 @app.post("/run")

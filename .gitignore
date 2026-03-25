@@ -1,3 +1,5 @@
 __pycache__/
 .venv/
 .env
+backend/analytics_state.json
+backend/analytics_state.tmp

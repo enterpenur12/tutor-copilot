@@ -5,9 +5,10 @@ import { useEffect, useMemo, useState } from "react";
 const BACKEND = "https://tutor-copilot.onrender.com";
 const MAX_FILE_BYTES = 1_000_000;
 const ANALYTICS_STORAGE_KEY = "tcAnalytics";
+const BROWSER_ID_STORAGE_KEY = "tcBrowserId";
 const USER_COUNTED_STORAGE_KEY = "tcUserCounted";
 const ANALYTICS_RESET_VERSION_KEY = "tcAnalyticsResetVersion";
-const ANALYTICS_RESET_VERSION = "2026-03-25-reset-1";
+const ANALYTICS_RESET_VERSION = "2026-03-25-reset-2";
 const MIN_HELPFULNESS_RESPONSES = 5;
 const FEEDBACK_PROMPT_TIMEOUT_MS = 9000;
 
@@ -159,22 +160,39 @@ function makeId() {
   return String(Date.now());
 }
 
+function normalizeAnalyticsCount(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : 0;
+}
+
+function normalizeAnalyticsState(value: Partial<AnalyticsState> | null | undefined) {
+  return {
+    uniqueUsers: normalizeAnalyticsCount(value?.uniqueUsers),
+    essaysReviewed: normalizeAnalyticsCount(value?.essaysReviewed),
+    helpfulYes: normalizeAnalyticsCount(value?.helpfulYes),
+    helpfulNo: normalizeAnalyticsCount(value?.helpfulNo),
+  };
+}
+
 function parseAnalyticsState(value: string | null) {
   if (!value) return defaultAnalyticsState;
 
   try {
-    const parsed = JSON.parse(value) as Partial<AnalyticsState>;
-    return {
-      uniqueUsers:
-        typeof parsed.uniqueUsers === "number" ? parsed.uniqueUsers : 0,
-      essaysReviewed:
-        typeof parsed.essaysReviewed === "number" ? parsed.essaysReviewed : 0,
-      helpfulYes: typeof parsed.helpfulYes === "number" ? parsed.helpfulYes : 0,
-      helpfulNo: typeof parsed.helpfulNo === "number" ? parsed.helpfulNo : 0,
-    };
-    } catch {
-      return defaultAnalyticsState;
-    }
+    return normalizeAnalyticsState(JSON.parse(value) as Partial<AnalyticsState>);
+  } catch {
+    return defaultAnalyticsState;
+  }
+}
+
+function getOrCreateBrowserId() {
+  const existing = localStorage.getItem(BROWSER_ID_STORAGE_KEY);
+  if (existing?.trim()) {
+    return { browserId: existing, created: false };
+  }
+  const browserId = makeId();
+  localStorage.setItem(BROWSER_ID_STORAGE_KEY, browserId);
+  return { browserId, created: true };
 }
 
 async function fetchAnalytics() {
@@ -183,14 +201,7 @@ async function fetchAnalytics() {
     throw new Error("Failed to load analytics.");
   }
   const data = (await res.json()) as Partial<AnalyticsState>;
-  return {
-    uniqueUsers:
-      typeof data.uniqueUsers === "number" ? data.uniqueUsers : 0,
-    essaysReviewed:
-      typeof data.essaysReviewed === "number" ? data.essaysReviewed : 0,
-    helpfulYes: typeof data.helpfulYes === "number" ? data.helpfulYes : 0,
-    helpfulNo: typeof data.helpfulNo === "number" ? data.helpfulNo : 0,
-  };
+  return normalizeAnalyticsState(data);
 }
 
 export default function Home() {
@@ -220,6 +231,8 @@ export default function Home() {
     useState<AnalyticsState>(defaultAnalyticsState);
   const [feedbackPromptOpen, setFeedbackPromptOpen] = useState(false);
   const [feedbackPending, setFeedbackPending] = useState(false);
+  const [feedbackPromptId, setFeedbackPromptId] = useState<string | null>(null);
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
 
   const rubricStats = useMemo(
     () => ({ words: countWords(rubric), chars: rubric.length }),
@@ -262,36 +275,39 @@ export default function Home() {
 
     async function syncAnalytics() {
       const existingCountFlag = localStorage.getItem(USER_COUNTED_STORAGE_KEY);
+      const { browserId, created } = getOrCreateBrowserId();
 
       try {
+        if (existingCountFlag !== "1" || created) {
+          const registerRes = await fetch(`${BACKEND}/analytics/register-user`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ browser_id: browserId }),
+          });
+          if (!registerRes.ok) {
+            throw new Error("Failed to register user.");
+          }
+          const registeredAnalytics = normalizeAnalyticsState(
+            (await registerRes.json()) as Partial<AnalyticsState>
+          );
+          if (!active) return;
+
+          localStorage.setItem(USER_COUNTED_STORAGE_KEY, "1");
+          localStorage.setItem(
+            ANALYTICS_STORAGE_KEY,
+            JSON.stringify(registeredAnalytics)
+          );
+          setAnalytics(registeredAnalytics);
+        }
+
         const currentAnalytics = await fetchAnalytics();
         if (!active) return;
 
-        if (existingCountFlag === "1") {
-          setAnalytics(currentAnalytics);
-          localStorage.setItem(
-            ANALYTICS_STORAGE_KEY,
-            JSON.stringify(currentAnalytics)
-          );
-          return;
-        }
-
-        const registerRes = await fetch(`${BACKEND}/analytics/register-user`, {
-          method: "POST",
-        });
-        if (!registerRes.ok) {
-          throw new Error("Failed to register user.");
-        }
-        const registeredAnalytics =
-          (await registerRes.json()) as AnalyticsState;
-        if (!active) return;
-
-        localStorage.setItem(USER_COUNTED_STORAGE_KEY, "1");
         localStorage.setItem(
           ANALYTICS_STORAGE_KEY,
-          JSON.stringify(registeredAnalytics)
+          JSON.stringify(currentAnalytics)
         );
-        setAnalytics(registeredAnalytics);
+        setAnalytics(currentAnalytics);
       } catch {
         const fallbackAnalytics = parseAnalyticsState(
           localStorage.getItem(ANALYTICS_STORAGE_KEY)
@@ -314,6 +330,8 @@ export default function Home() {
     const timer = window.setTimeout(() => {
       setFeedbackPromptOpen(false);
       setFeedbackPending(false);
+      setFeedbackPromptId(null);
+      setFeedbackSubmitting(false);
     }, FEEDBACK_PROMPT_TIMEOUT_MS);
 
     return () => window.clearTimeout(timer);
@@ -333,7 +351,9 @@ export default function Home() {
     if (!res.ok) {
       throw new Error("Analytics update failed.");
     }
-    const data = (await res.json()) as AnalyticsState;
+    const data = normalizeAnalyticsState(
+      (await res.json()) as Partial<AnalyticsState>
+    );
     persistAnalytics(data);
   }
 
@@ -378,8 +398,12 @@ export default function Home() {
       const data = await res.json();
       setOutput(normalizeResponse(data));
       try {
-        await trackAnalytics("/analytics/essay-reviewed");
+        await trackAnalytics("/analytics/essay-reviewed", {
+          event_id: makeId(),
+        });
       } catch {}
+      setFeedbackPromptId(makeId());
+      setFeedbackSubmitting(false);
       setFeedbackPending(true);
       setFeedbackPromptOpen(true);
     } catch {
@@ -480,13 +504,21 @@ export default function Home() {
   }
 
   function submitHelpfulnessFeedback(answer: "yes" | "no") {
-    if (!feedbackPending) return;
+    if (!feedbackPending || !feedbackPromptId || feedbackSubmitting) return;
 
+    const eventId = feedbackPromptId;
+    setFeedbackSubmitting(true);
     void trackAnalytics("/analytics/helpfulness", {
       helpful: answer === "yes",
-    }).catch(() => {});
+      event_id: eventId,
+    })
+      .catch(() => {})
+      .finally(() => {
+        setFeedbackSubmitting(false);
+      });
     setFeedbackPromptOpen(false);
     setFeedbackPending(false);
+    setFeedbackPromptId(null);
   }
 
   const compareDisabled =
