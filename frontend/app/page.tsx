@@ -4,6 +4,12 @@ import { useEffect, useMemo, useState } from "react";
 
 const BACKEND = "https://tutor-copilot.onrender.com";
 const MAX_FILE_BYTES = 1_000_000;
+const ANALYTICS_STORAGE_KEY = "tcAnalytics";
+const USER_COUNTED_STORAGE_KEY = "tcUserCounted";
+const ANALYTICS_RESET_VERSION_KEY = "tcAnalyticsResetVersion";
+const ANALYTICS_RESET_VERSION = "2026-03-25-reset-1";
+const MIN_HELPFULNESS_RESPONSES = 5;
+const FEEDBACK_PROMPT_TIMEOUT_MS = 9000;
 
 const SAMPLE_RUBRIC = `Criteria:
 - Accuracy: Claims are correct and supported.
@@ -49,6 +55,20 @@ type ComparisonEntry = {
   draft_before: string;
   draft_after: string;
   result: ComparisonResult;
+};
+
+type AnalyticsState = {
+  uniqueUsers: number;
+  essaysReviewed: number;
+  helpfulYes: number;
+  helpfulNo: number;
+};
+
+const defaultAnalyticsState: AnalyticsState = {
+  uniqueUsers: 0,
+  essaysReviewed: 0,
+  helpfulYes: 0,
+  helpfulNo: 0,
 };
 
 function countWords(text: string) {
@@ -113,7 +133,7 @@ function normalizeResponse(data: unknown) {
         const parsed = JSON.parse(candidate);
         const formatted = formatFeedback(parsed);
         return formatted || JSON.stringify(parsed, null, 2);
-      } catch (error) {
+      } catch {
         return cleanText(record.feedback);
       }
     }
@@ -139,6 +159,40 @@ function makeId() {
   return String(Date.now());
 }
 
+function parseAnalyticsState(value: string | null) {
+  if (!value) return defaultAnalyticsState;
+
+  try {
+    const parsed = JSON.parse(value) as Partial<AnalyticsState>;
+    return {
+      uniqueUsers:
+        typeof parsed.uniqueUsers === "number" ? parsed.uniqueUsers : 0,
+      essaysReviewed:
+        typeof parsed.essaysReviewed === "number" ? parsed.essaysReviewed : 0,
+      helpfulYes: typeof parsed.helpfulYes === "number" ? parsed.helpfulYes : 0,
+      helpfulNo: typeof parsed.helpfulNo === "number" ? parsed.helpfulNo : 0,
+    };
+    } catch {
+      return defaultAnalyticsState;
+    }
+}
+
+async function fetchAnalytics() {
+  const res = await fetch(`${BACKEND}/analytics`);
+  if (!res.ok) {
+    throw new Error("Failed to load analytics.");
+  }
+  const data = (await res.json()) as Partial<AnalyticsState>;
+  return {
+    uniqueUsers:
+      typeof data.uniqueUsers === "number" ? data.uniqueUsers : 0,
+    essaysReviewed:
+      typeof data.essaysReviewed === "number" ? data.essaysReviewed : 0,
+    helpfulYes: typeof data.helpfulYes === "number" ? data.helpfulYes : 0,
+    helpfulNo: typeof data.helpfulNo === "number" ? data.helpfulNo : 0,
+  };
+}
+
 export default function Home() {
   const [activeTab, setActiveTab] = useState<"feedback" | "compare">("feedback");
   const [rubricPreset, setRubricPreset] = useState("blank");
@@ -162,6 +216,10 @@ export default function Home() {
   const [comparisonHistory, setComparisonHistory] = useState<ComparisonEntry[]>(
     []
   );
+  const [analytics, setAnalytics] =
+    useState<AnalyticsState>(defaultAnalyticsState);
+  const [feedbackPromptOpen, setFeedbackPromptOpen] = useState(false);
+  const [feedbackPending, setFeedbackPending] = useState(false);
 
   const rubricStats = useMemo(
     () => ({ words: countWords(rubric), chars: rubric.length }),
@@ -179,19 +237,105 @@ export default function Home() {
     () => ({ words: countWords(draftAfter), chars: draftAfter.length }),
     [draftAfter]
   );
+  const helpfulnessResponses = analytics.helpfulYes + analytics.helpfulNo;
+  const helpfulnessPercentage =
+    helpfulnessResponses > 0
+      ? Math.round((analytics.helpfulYes / helpfulnessResponses) * 100)
+      : 0;
 
   useEffect(() => {
-    const stored = localStorage.getItem("comparisonHistory");
-    if (!stored) return;
-    try {
-      const parsed = JSON.parse(stored);
-      if (Array.isArray(parsed)) {
-        setComparisonHistory(parsed);
-      }
-    } catch (error) {
-      setComparisonHistory([]);
-    }
+    localStorage.removeItem("comparisonHistory");
   }, []);
+
+  useEffect(() => {
+    const resetVersion = localStorage.getItem(ANALYTICS_RESET_VERSION_KEY);
+    if (resetVersion !== ANALYTICS_RESET_VERSION) {
+      localStorage.removeItem(ANALYTICS_STORAGE_KEY);
+      localStorage.removeItem(USER_COUNTED_STORAGE_KEY);
+      localStorage.setItem(
+        ANALYTICS_RESET_VERSION_KEY,
+        ANALYTICS_RESET_VERSION
+      );
+    }
+
+    let active = true;
+
+    async function syncAnalytics() {
+      const existingCountFlag = localStorage.getItem(USER_COUNTED_STORAGE_KEY);
+
+      try {
+        const currentAnalytics = await fetchAnalytics();
+        if (!active) return;
+
+        if (existingCountFlag === "1") {
+          setAnalytics(currentAnalytics);
+          localStorage.setItem(
+            ANALYTICS_STORAGE_KEY,
+            JSON.stringify(currentAnalytics)
+          );
+          return;
+        }
+
+        const registerRes = await fetch(`${BACKEND}/analytics/register-user`, {
+          method: "POST",
+        });
+        if (!registerRes.ok) {
+          throw new Error("Failed to register user.");
+        }
+        const registeredAnalytics =
+          (await registerRes.json()) as AnalyticsState;
+        if (!active) return;
+
+        localStorage.setItem(USER_COUNTED_STORAGE_KEY, "1");
+        localStorage.setItem(
+          ANALYTICS_STORAGE_KEY,
+          JSON.stringify(registeredAnalytics)
+        );
+        setAnalytics(registeredAnalytics);
+      } catch {
+        const fallbackAnalytics = parseAnalyticsState(
+          localStorage.getItem(ANALYTICS_STORAGE_KEY)
+        );
+        if (!active) return;
+        setAnalytics(fallbackAnalytics);
+      }
+    }
+
+    void syncAnalytics();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!feedbackPromptOpen || !feedbackPending) return;
+
+    const timer = window.setTimeout(() => {
+      setFeedbackPromptOpen(false);
+      setFeedbackPending(false);
+    }, FEEDBACK_PROMPT_TIMEOUT_MS);
+
+    return () => window.clearTimeout(timer);
+  }, [feedbackPromptOpen, feedbackPending]);
+
+  function persistAnalytics(next: AnalyticsState) {
+    setAnalytics(next);
+    localStorage.setItem(ANALYTICS_STORAGE_KEY, JSON.stringify(next));
+  }
+
+  async function trackAnalytics(endpoint: string, body?: Record<string, unknown>) {
+    const res = await fetch(`${BACKEND}${endpoint}`, {
+      method: "POST",
+      headers: body ? { "Content-Type": "application/json" } : undefined,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok) {
+      throw new Error("Analytics update failed.");
+    }
+    const data = (await res.json()) as AnalyticsState;
+    persistAnalytics(data);
+  }
 
   function updateRubric(nextValue: string) {
     setRubric(nextValue);
@@ -207,7 +351,6 @@ export default function Home() {
 
   function persistComparisonHistory(next: ComparisonEntry[]) {
     setComparisonHistory(next);
-    localStorage.setItem("comparisonHistory", JSON.stringify(next));
   }
 
   async function runAI() {
@@ -228,9 +371,18 @@ export default function Home() {
         }),
       });
 
+      if (!res.ok) {
+        throw new Error("Run failed.");
+      }
+
       const data = await res.json();
       setOutput(normalizeResponse(data));
-    } catch (e) {
+      try {
+        await trackAnalytics("/analytics/essay-reviewed");
+      } catch {}
+      setFeedbackPending(true);
+      setFeedbackPromptOpen(true);
+    } catch {
       setOutput("Something went wrong. Please try again shortly.");
     } finally {
       setIsRunning(false);
@@ -278,7 +430,7 @@ export default function Home() {
       };
       const nextHistory = [entry, ...comparisonHistory].slice(0, 25);
       persistComparisonHistory(nextHistory);
-    } catch (error) {
+    } catch {
       setCompareError("Something went wrong. Please try again shortly.");
     } finally {
       setIsComparing(false);
@@ -302,7 +454,7 @@ export default function Home() {
         setStudentWork(text);
       }
       setUploadMessage(`Loaded ${file.name} into ${target}.`);
-    } catch (error) {
+    } catch {
       setUploadMessage("File read failed. Try again.");
     }
   }
@@ -327,6 +479,16 @@ export default function Home() {
     persistComparisonHistory([]);
   }
 
+  function submitHelpfulnessFeedback(answer: "yes" | "no") {
+    if (!feedbackPending) return;
+
+    void trackAnalytics("/analytics/helpfulness", {
+      helpful: answer === "yes",
+    }).catch(() => {});
+    setFeedbackPromptOpen(false);
+    setFeedbackPending(false);
+  }
+
   const compareDisabled =
     isComparing ||
     !rubric.trim() ||
@@ -335,6 +497,29 @@ export default function Home() {
 
   return (
     <main className="hud">
+      <aside className="analytics-panel" aria-label="Usage analytics">
+        <div className="analytics-panel__eyebrow">Live analytics</div>
+        <div className="analytics-panel__grid">
+          <div className="analytics-stat">
+            <span className="analytics-stat__label">Users</span>
+            <strong className="analytics-stat__value">
+              {analytics.uniqueUsers}
+            </strong>
+          </div>
+          <div className="analytics-stat">
+            <span className="analytics-stat__label">Essays</span>
+            <strong className="analytics-stat__value">
+              {analytics.essaysReviewed}
+            </strong>
+          </div>
+        </div>
+        <div className="analytics-panel__footer">
+          {helpfulnessResponses >= MIN_HELPFULNESS_RESPONSES
+            ? `Helpful: ${helpfulnessPercentage}%`
+            : "Collecting feedback..."}
+        </div>
+      </aside>
+
       <header className="hud__header">
         <div className="brand">
           <div className="brand__mark">TC</div>
@@ -344,6 +529,11 @@ export default function Home() {
           </div>
         </div>
       </header>
+
+      <div className="site-disclaimer">
+        <span>For educational use only. Please do not submit personal, sensitive, or confidential information.</span>
+        <span>User submissions are not stored after processing.</span>
+      </div>
 
       <div className="tabs">
         <button
@@ -852,6 +1042,35 @@ export default function Home() {
           </div>
         </section>
       )}
+
+      <div
+        className={`feedback-prompt ${
+          feedbackPromptOpen ? "feedback-prompt--visible" : ""
+        }`}
+        role="status"
+        aria-live="polite"
+        aria-hidden={!feedbackPromptOpen}
+      >
+        <div className="feedback-prompt__question">
+          Did this feedback help improve your essay?
+        </div>
+        <div className="feedback-prompt__actions">
+          <button
+            className="button button--secondary"
+            onClick={() => submitHelpfulnessFeedback("yes")}
+            type="button"
+          >
+            Yes
+          </button>
+          <button
+            className="button button--ghost"
+            onClick={() => submitHelpfulnessFeedback("no")}
+            type="button"
+          >
+            No
+          </button>
+        </div>
+      </div>
     </main>
   );
 }
