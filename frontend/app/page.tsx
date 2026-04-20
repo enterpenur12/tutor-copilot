@@ -512,7 +512,9 @@ export default function Home() {
         <div className="analytics-panel__eyebrow">Analytics</div>
         <div className="analytics-panel__grid">
           <div className="analytics-stat">
-            <span className="analytics-stat__label">Total Users</span>
+            <span className="analytics-stat__label analytics-stat__label--balanced">
+              Total Users
+            </span>
             <strong className="analytics-stat__value">
               {analytics.totalUsers}
             </strong>
