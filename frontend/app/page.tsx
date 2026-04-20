@@ -4,12 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 
 const BACKEND = "https://tutor-copilot.onrender.com";
 const MAX_FILE_BYTES = 1_000_000;
-const ANALYTICS_STORAGE_KEY = "tcAnalytics";
-const BROWSER_ID_STORAGE_KEY = "tcBrowserId";
-const USER_COUNTED_STORAGE_KEY = "tcUserCounted";
-const ANALYTICS_RESET_VERSION_KEY = "tcAnalyticsResetVersion";
-const ANALYTICS_RESET_VERSION = "2026-03-25-reset-2";
-const MIN_HELPFULNESS_RESPONSES = 5;
+const ANALYTICS_STORAGE_KEY = "tcAnalyticsSnapshot";
+const BROWSER_ID_STORAGE_KEY = "tcAnalyticsBrowserId";
+const ANALYTICS_REFRESH_INTERVAL_MS = 30_000;
 const FEEDBACK_PROMPT_TIMEOUT_MS = 9000;
 
 const SAMPLE_RUBRIC = `Criteria:
@@ -58,18 +55,20 @@ type ComparisonEntry = {
   result: ComparisonResult;
 };
 
-type AnalyticsState = {
-  uniqueUsers: number;
-  essaysReviewed: number;
+type AnalyticsSnapshot = {
+  totalUsers: number;
+  essaysAnalyzed: number;
   helpfulYes: number;
   helpfulNo: number;
+  helpfulnessPercent: number;
 };
 
-const defaultAnalyticsState: AnalyticsState = {
-  uniqueUsers: 0,
-  essaysReviewed: 0,
+const defaultAnalyticsSnapshot: AnalyticsSnapshot = {
+  totalUsers: 0,
+  essaysAnalyzed: 0,
   helpfulYes: 0,
   helpfulNo: 0,
+  helpfulnessPercent: 0,
 };
 
 function countWords(text: string) {
@@ -166,22 +165,27 @@ function normalizeAnalyticsCount(value: unknown) {
     : 0;
 }
 
-function normalizeAnalyticsState(value: Partial<AnalyticsState> | null | undefined) {
+function normalizeAnalyticsSnapshot(
+  value: Partial<AnalyticsSnapshot> | null | undefined
+) {
   return {
-    uniqueUsers: normalizeAnalyticsCount(value?.uniqueUsers),
-    essaysReviewed: normalizeAnalyticsCount(value?.essaysReviewed),
+    totalUsers: normalizeAnalyticsCount(value?.totalUsers),
+    essaysAnalyzed: normalizeAnalyticsCount(value?.essaysAnalyzed),
     helpfulYes: normalizeAnalyticsCount(value?.helpfulYes),
     helpfulNo: normalizeAnalyticsCount(value?.helpfulNo),
+    helpfulnessPercent: normalizeAnalyticsCount(value?.helpfulnessPercent),
   };
 }
 
-function parseAnalyticsState(value: string | null) {
-  if (!value) return defaultAnalyticsState;
+function parseAnalyticsSnapshot(value: string | null) {
+  if (!value) return defaultAnalyticsSnapshot;
 
   try {
-    return normalizeAnalyticsState(JSON.parse(value) as Partial<AnalyticsState>);
+    return normalizeAnalyticsSnapshot(
+      JSON.parse(value) as Partial<AnalyticsSnapshot>
+    );
   } catch {
-    return defaultAnalyticsState;
+    return defaultAnalyticsSnapshot;
   }
 }
 
@@ -200,8 +204,21 @@ async function fetchAnalytics() {
   if (!res.ok) {
     throw new Error("Failed to load analytics.");
   }
-  const data = (await res.json()) as Partial<AnalyticsState>;
-  return normalizeAnalyticsState(data);
+  const data = (await res.json()) as Partial<AnalyticsSnapshot>;
+  return normalizeAnalyticsSnapshot(data);
+}
+
+async function postAnalytics(endpoint: string, body: Record<string, unknown>) {
+  const res = await fetch(`${BACKEND}${endpoint}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error("Analytics update failed.");
+  }
+  const data = (await res.json()) as Partial<AnalyticsSnapshot>;
+  return normalizeAnalyticsSnapshot(data);
 }
 
 export default function Home() {
@@ -228,10 +245,12 @@ export default function Home() {
     []
   );
   const [analytics, setAnalytics] =
-    useState<AnalyticsState>(defaultAnalyticsState);
+    useState<AnalyticsSnapshot>(defaultAnalyticsSnapshot);
   const [feedbackPromptOpen, setFeedbackPromptOpen] = useState(false);
   const [feedbackPending, setFeedbackPending] = useState(false);
-  const [feedbackPromptId, setFeedbackPromptId] = useState<string | null>(null);
+  const [pendingFeedbackRunId, setPendingFeedbackRunId] = useState<
+    string | null
+  >(null);
   const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
 
   const rubricStats = useMemo(
@@ -250,66 +269,27 @@ export default function Home() {
     () => ({ words: countWords(draftAfter), chars: draftAfter.length }),
     [draftAfter]
   );
-  const helpfulnessResponses = analytics.helpfulYes + analytics.helpfulNo;
-  const helpfulnessPercentage =
-    helpfulnessResponses > 0
-      ? Math.round((analytics.helpfulYes / helpfulnessResponses) * 100)
-      : 0;
-
   useEffect(() => {
     localStorage.removeItem("comparisonHistory");
   }, []);
 
   useEffect(() => {
-    const resetVersion = localStorage.getItem(ANALYTICS_RESET_VERSION_KEY);
-    if (resetVersion !== ANALYTICS_RESET_VERSION) {
-      localStorage.removeItem(ANALYTICS_STORAGE_KEY);
-      localStorage.removeItem(USER_COUNTED_STORAGE_KEY);
-      localStorage.setItem(
-        ANALYTICS_RESET_VERSION_KEY,
-        ANALYTICS_RESET_VERSION
-      );
-    }
-
     let active = true;
 
     async function syncAnalytics() {
-      const existingCountFlag = localStorage.getItem(USER_COUNTED_STORAGE_KEY);
-      const { browserId, created } = getOrCreateBrowserId();
+      const { browserId } = getOrCreateBrowserId();
 
       try {
-        if (existingCountFlag !== "1" || created) {
-          const registerRes = await fetch(`${BACKEND}/analytics/register-user`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ browser_id: browserId }),
-          });
-          if (!registerRes.ok) {
-            throw new Error("Failed to register user.");
+        const registeredAnalytics = await postAnalytics(
+          "/analytics/register-user",
+          {
+            browser_id: browserId,
           }
-          const registeredAnalytics = normalizeAnalyticsState(
-            (await registerRes.json()) as Partial<AnalyticsState>
-          );
-          if (!active) return;
-
-          localStorage.setItem(USER_COUNTED_STORAGE_KEY, "1");
-          localStorage.setItem(
-            ANALYTICS_STORAGE_KEY,
-            JSON.stringify(registeredAnalytics)
-          );
-          setAnalytics(registeredAnalytics);
-        }
-
-        const currentAnalytics = await fetchAnalytics();
-        if (!active) return;
-
-        localStorage.setItem(
-          ANALYTICS_STORAGE_KEY,
-          JSON.stringify(currentAnalytics)
         );
-        setAnalytics(currentAnalytics);
+        if (!active) return;
+        persistAnalytics(registeredAnalytics);
       } catch {
-        const fallbackAnalytics = parseAnalyticsState(
+        const fallbackAnalytics = parseAnalyticsSnapshot(
           localStorage.getItem(ANALYTICS_STORAGE_KEY)
         );
         if (!active) return;
@@ -318,9 +298,18 @@ export default function Home() {
     }
 
     void syncAnalytics();
+    const intervalId = window.setInterval(() => {
+      void fetchAnalytics()
+        .then((snapshot) => {
+          if (!active) return;
+          persistAnalytics(snapshot);
+        })
+        .catch(() => {});
+    }, ANALYTICS_REFRESH_INTERVAL_MS);
 
     return () => {
       active = false;
+      window.clearInterval(intervalId);
     };
   }, []);
 
@@ -330,31 +319,16 @@ export default function Home() {
     const timer = window.setTimeout(() => {
       setFeedbackPromptOpen(false);
       setFeedbackPending(false);
-      setFeedbackPromptId(null);
+      setPendingFeedbackRunId(null);
       setFeedbackSubmitting(false);
     }, FEEDBACK_PROMPT_TIMEOUT_MS);
 
     return () => window.clearTimeout(timer);
   }, [feedbackPromptOpen, feedbackPending]);
 
-  function persistAnalytics(next: AnalyticsState) {
+  function persistAnalytics(next: AnalyticsSnapshot) {
     setAnalytics(next);
     localStorage.setItem(ANALYTICS_STORAGE_KEY, JSON.stringify(next));
-  }
-
-  async function trackAnalytics(endpoint: string, body?: Record<string, unknown>) {
-    const res = await fetch(`${BACKEND}${endpoint}`, {
-      method: "POST",
-      headers: body ? { "Content-Type": "application/json" } : undefined,
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    if (!res.ok) {
-      throw new Error("Analytics update failed.");
-    }
-    const data = normalizeAnalyticsState(
-      (await res.json()) as Partial<AnalyticsState>
-    );
-    persistAnalytics(data);
   }
 
   function updateRubric(nextValue: string) {
@@ -397,12 +371,14 @@ export default function Home() {
 
       const data = await res.json();
       setOutput(normalizeResponse(data));
+      const runId = makeId();
       try {
-        await trackAnalytics("/analytics/essay-reviewed", {
-          event_id: makeId(),
+        const snapshot = await postAnalytics("/analytics/run-success", {
+          run_id: runId,
         });
+        persistAnalytics(snapshot);
       } catch {}
-      setFeedbackPromptId(makeId());
+      setPendingFeedbackRunId(runId);
       setFeedbackSubmitting(false);
       setFeedbackPending(true);
       setFeedbackPromptOpen(true);
@@ -504,21 +480,24 @@ export default function Home() {
   }
 
   function submitHelpfulnessFeedback(answer: "yes" | "no") {
-    if (!feedbackPending || !feedbackPromptId || feedbackSubmitting) return;
+    if (!feedbackPending || !pendingFeedbackRunId || feedbackSubmitting) return;
 
-    const eventId = feedbackPromptId;
+    const runId = pendingFeedbackRunId;
     setFeedbackSubmitting(true);
-    void trackAnalytics("/analytics/helpfulness", {
+    void postAnalytics("/analytics/helpfulness", {
       helpful: answer === "yes",
-      event_id: eventId,
+      run_id: runId,
     })
+      .then((snapshot) => {
+        persistAnalytics(snapshot);
+      })
       .catch(() => {})
       .finally(() => {
         setFeedbackSubmitting(false);
       });
     setFeedbackPromptOpen(false);
     setFeedbackPending(false);
-    setFeedbackPromptId(null);
+    setPendingFeedbackRunId(null);
   }
 
   const compareDisabled =
@@ -530,26 +509,28 @@ export default function Home() {
   return (
     <main className="hud">
       <aside className="analytics-panel" aria-label="Usage analytics">
-        <div className="analytics-panel__eyebrow">Live analytics</div>
+        <div className="analytics-panel__eyebrow">Analytics</div>
         <div className="analytics-panel__grid">
           <div className="analytics-stat">
-            <span className="analytics-stat__label">Users</span>
+            <span className="analytics-stat__label">Total Users</span>
             <strong className="analytics-stat__value">
-              {analytics.uniqueUsers}
+              {analytics.totalUsers}
             </strong>
           </div>
           <div className="analytics-stat">
-            <span className="analytics-stat__label">Essays</span>
+            <span className="analytics-stat__label">Essays Analyzed</span>
             <strong className="analytics-stat__value">
-              {analytics.essaysReviewed}
+              {analytics.essaysAnalyzed}
+            </strong>
+          </div>
+          <div className="analytics-stat">
+            <span className="analytics-stat__label">Helpfulness %</span>
+            <strong className="analytics-stat__value">
+              {analytics.helpfulnessPercent}%
             </strong>
           </div>
         </div>
-        <div className="analytics-panel__footer">
-          {helpfulnessResponses >= MIN_HELPFULNESS_RESPONSES
-            ? `Helpful: ${helpfulnessPercentage}%`
-            : "Collecting feedback..."}
-        </div>
+        <div className="analytics-panel__footer">Updates after successful runs and answered feedback prompts.</div>
       </aside>
 
       <header className="hud__header">
@@ -1091,6 +1072,7 @@ export default function Home() {
             className="button button--secondary"
             onClick={() => submitHelpfulnessFeedback("yes")}
             type="button"
+            disabled={feedbackSubmitting}
           >
             Yes
           </button>
@@ -1098,6 +1080,7 @@ export default function Home() {
             className="button button--ghost"
             onClick={() => submitHelpfulnessFeedback("no")}
             type="button"
+            disabled={feedbackSubmitting}
           >
             No
           </button>

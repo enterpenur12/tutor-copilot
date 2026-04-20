@@ -24,7 +24,12 @@ DAILY_LIMIT_WINDOW_SECONDS = 86400
 DAILY_LIMIT_REQUESTS = 120
 REQUEST_TIMEOUT_SECONDS = 45
 ANALYTICS_ID_MAX_LENGTH = 128
-ANALYTICS_STATE_PATH = Path(__file__).with_name("analytics_state.json")
+ANALYTICS_STORAGE_PATH = Path(
+    os.environ.get(
+        "ANALYTICS_STORAGE_PATH",
+        str(Path(__file__).with_name("analytics_store.json")),
+    )
+)
 TRUSTED_ORIGINS = [
     "https://tutor-copilot.vercel.app",
     "http://localhost:3000",
@@ -94,21 +99,6 @@ class CompareRequest(InputModel):
         return value
 
 
-class HelpfulnessRequest(BaseModel):
-    helpful: bool
-    event_id: str = Field(..., min_length=1, max_length=ANALYTICS_ID_MAX_LENGTH)
-
-    class Config:
-        extra = "forbid"
-
-    @validator("event_id")
-    def validate_event_id(cls, value: str):
-        normalized = value.strip()
-        if not normalized:
-            raise ValueError("Event ID is required.")
-        return normalized
-
-
 class BrowserRegistrationRequest(BaseModel):
     browser_id: str = Field(..., min_length=1, max_length=ANALYTICS_ID_MAX_LENGTH)
 
@@ -123,17 +113,32 @@ class BrowserRegistrationRequest(BaseModel):
         return normalized
 
 
-class AnalyticsEventRequest(BaseModel):
-    event_id: str = Field(..., min_length=1, max_length=ANALYTICS_ID_MAX_LENGTH)
+class AnalyticsRunRequest(BaseModel):
+    run_id: str = Field(..., min_length=1, max_length=ANALYTICS_ID_MAX_LENGTH)
 
     class Config:
         extra = "forbid"
 
-    @validator("event_id")
-    def validate_event_id(cls, value: str):
+    @validator("run_id")
+    def validate_run_id(cls, value: str):
         normalized = value.strip()
         if not normalized:
-            raise ValueError("Event ID is required.")
+            raise ValueError("Run ID is required.")
+        return normalized
+
+
+class HelpfulnessRequest(BaseModel):
+    helpful: bool
+    run_id: str = Field(..., min_length=1, max_length=ANALYTICS_ID_MAX_LENGTH)
+
+    class Config:
+        extra = "forbid"
+
+    @validator("run_id")
+    def validate_run_id(cls, value: str):
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("Run ID is required.")
         return normalized
 
 
@@ -158,14 +163,6 @@ short_window_limiter = InMemoryRateLimiter()
 daily_limiter = InMemoryRateLimiter()
 
 
-def _normalize_count(value: object) -> int:
-    if isinstance(value, bool):
-        return 0
-    if isinstance(value, (int, float)):
-        return max(0, int(value))
-    return 0
-
-
 class AnalyticsStore:
     def __init__(self, path: Path) -> None:
         self._path = path
@@ -174,13 +171,9 @@ class AnalyticsStore:
 
     def _default_state(self) -> dict:
         return {
-            "uniqueUsers": 0,
-            "essaysReviewed": 0,
-            "helpfulYes": 0,
-            "helpfulNo": 0,
             "_browserIds": set(),
-            "_essayEventIds": set(),
-            "_helpfulnessEventIds": set(),
+            "_successfulRunIds": set(),
+            "_helpfulnessByRun": {},
         }
 
     def _normalize_id_collection(self, value: object) -> set[str]:
@@ -200,38 +193,48 @@ class AnalyticsStore:
         if not isinstance(raw, dict):
             return state
 
-        state["uniqueUsers"] = _normalize_count(raw.get("uniqueUsers"))
-        state["essaysReviewed"] = _normalize_count(raw.get("essaysReviewed"))
-        state["helpfulYes"] = _normalize_count(raw.get("helpfulYes"))
-        state["helpfulNo"] = _normalize_count(raw.get("helpfulNo"))
         state["_browserIds"] = self._normalize_id_collection(
             raw.get("_browserIds", raw.get("browserIds"))
         )
-        state["_essayEventIds"] = self._normalize_id_collection(
-            raw.get("_essayEventIds", raw.get("essayEventIds"))
+        state["_successfulRunIds"] = self._normalize_id_collection(
+            raw.get("_successfulRunIds", raw.get("successfulRunIds"))
         )
-        state["_helpfulnessEventIds"] = self._normalize_id_collection(
-            raw.get("_helpfulnessEventIds", raw.get("helpfulnessEventIds"))
-        )
-        state["uniqueUsers"] = max(state["uniqueUsers"], len(state["_browserIds"]))
-        state["essaysReviewed"] = max(
-            state["essaysReviewed"], len(state["_essayEventIds"])
-        )
-        total_helpfulness_events = len(state["_helpfulnessEventIds"])
-        total_helpfulness_count = state["helpfulYes"] + state["helpfulNo"]
-        if total_helpfulness_count < total_helpfulness_events:
-            state["helpfulNo"] += total_helpfulness_events - total_helpfulness_count
+        helpfulness_by_run = raw.get("_helpfulnessByRun", raw.get("helpfulnessByRun"))
+        if isinstance(helpfulness_by_run, dict):
+            for run_id, helpful in helpfulness_by_run.items():
+                if not isinstance(run_id, str) or not isinstance(helpful, bool):
+                    continue
+                cleaned = run_id.strip()
+                if cleaned:
+                    normalized_id = cleaned[:ANALYTICS_ID_MAX_LENGTH]
+                    state["_helpfulnessByRun"][normalized_id] = helpful
         return state
 
     def _serialize(self, state: dict) -> dict:
         return {
-            "uniqueUsers": state["uniqueUsers"],
-            "essaysReviewed": state["essaysReviewed"],
-            "helpfulYes": state["helpfulYes"],
-            "helpfulNo": state["helpfulNo"],
             "browserIds": sorted(state["_browserIds"]),
-            "essayEventIds": sorted(state["_essayEventIds"]),
-            "helpfulnessEventIds": sorted(state["_helpfulnessEventIds"]),
+            "successfulRunIds": sorted(state["_successfulRunIds"]),
+            "helpfulnessByRun": dict(sorted(state["_helpfulnessByRun"].items())),
+        }
+
+    def _build_snapshot_unlocked(self) -> dict:
+        helpful_yes = sum(
+            1 for helpful in self._state["_helpfulnessByRun"].values() if helpful
+        )
+        helpful_no = sum(
+            1 for helpful in self._state["_helpfulnessByRun"].values() if not helpful
+        )
+        total_feedback = helpful_yes + helpful_no
+        helpfulness_percent = (
+            round((helpful_yes / total_feedback) * 100) if total_feedback else 0
+        )
+
+        return {
+            "totalUsers": len(self._state["_browserIds"]),
+            "essaysAnalyzed": len(self._state["_successfulRunIds"]),
+            "helpfulYes": helpful_yes,
+            "helpfulNo": helpful_no,
+            "helpfulnessPercent": helpfulness_percent,
         }
 
     def _write_unlocked(self, state: dict) -> None:
@@ -259,45 +262,32 @@ class AnalyticsStore:
 
     def snapshot(self) -> dict:
         with self._lock:
-            return {
-                "uniqueUsers": self._state["uniqueUsers"],
-                "essaysReviewed": self._state["essaysReviewed"],
-                "helpfulYes": self._state["helpfulYes"],
-                "helpfulNo": self._state["helpfulNo"],
-            }
+            return self._build_snapshot_unlocked()
 
     def register_browser(self, browser_id: str) -> dict:
         with self._lock:
-            if browser_id in self._state["_browserIds"]:
-                return self.snapshot()
             self._state["_browserIds"].add(browser_id)
-            self._state["uniqueUsers"] = len(self._state["_browserIds"])
             self._write_unlocked(self._state)
             return self.snapshot()
 
-    def register_essay_review(self, event_id: str) -> dict:
+    def register_successful_run(self, run_id: str) -> dict:
         with self._lock:
-            if event_id in self._state["_essayEventIds"]:
-                return self.snapshot()
-            self._state["_essayEventIds"].add(event_id)
-            self._state["essaysReviewed"] = len(self._state["_essayEventIds"])
+            self._state["_successfulRunIds"].add(run_id)
             self._write_unlocked(self._state)
             return self.snapshot()
 
-    def register_helpfulness(self, event_id: str, helpful: bool) -> dict:
+    def register_helpfulness(self, run_id: str, helpful: bool) -> dict:
         with self._lock:
-            if event_id in self._state["_helpfulnessEventIds"]:
+            if run_id not in self._state["_successfulRunIds"]:
+                raise HTTPException(status_code=404, detail="Run not found.")
+            if run_id in self._state["_helpfulnessByRun"]:
                 return self.snapshot()
-            self._state["_helpfulnessEventIds"].add(event_id)
-            if helpful:
-                self._state["helpfulYes"] += 1
-            else:
-                self._state["helpfulNo"] += 1
+            self._state["_helpfulnessByRun"][run_id] = helpful
             self._write_unlocked(self._state)
             return self.snapshot()
 
 
-analytics_store = AnalyticsStore(ANALYTICS_STATE_PATH)
+analytics_store = AnalyticsStore(ANALYTICS_STORAGE_PATH)
 
 
 def _get_client_token(request: Request) -> str:
@@ -526,7 +516,7 @@ async def protect_request(request: Request, call_next):
         "/run",
         "/compare",
         "/analytics/register-user",
-        "/analytics/essay-reviewed",
+        "/analytics/run-success",
         "/analytics/helpfulness",
     }:
         content_length = request.headers.get("content-length")
@@ -562,14 +552,14 @@ def register_user(req: BrowserRegistrationRequest):
     return analytics_store.register_browser(req.browser_id)
 
 
-@app.post("/analytics/essay-reviewed")
-def register_essay_review(req: AnalyticsEventRequest):
-    return analytics_store.register_essay_review(req.event_id)
+@app.post("/analytics/run-success")
+def register_run_success(req: AnalyticsRunRequest):
+    return analytics_store.register_successful_run(req.run_id)
 
 
 @app.post("/analytics/helpfulness")
 def register_helpfulness(req: HelpfulnessRequest):
-    return analytics_store.register_helpfulness(req.event_id, req.helpful)
+    return analytics_store.register_helpfulness(req.run_id, req.helpful)
 
 
 @app.post("/run")
