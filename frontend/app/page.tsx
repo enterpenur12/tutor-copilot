@@ -513,7 +513,9 @@ export default function Home() {
         <div className="analytics-panel__grid">
           <div className="analytics-stat">
             <span className="analytics-stat__label analytics-stat__label--balanced">
-              Total Users
+              Total
+              <br />
+              Users
             </span>
             <strong className="analytics-stat__value">
               {analytics.totalUsers}
