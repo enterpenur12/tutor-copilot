@@ -62,7 +62,7 @@ OPENAI_API_KEY=your_api_key_here
 
 Tutor Copilot was developed to support student writing improvement and has been piloted with learners through SEA Literacy, a nonprofit serving refugee and multilingual students.
 
-The platform has analyzed over 50 student essays and aims to make high-quality writing feedback more accessible to learners everywhere.
+The platform has analyzed over 800 student essays and aims to make high-quality writing feedback more accessible to learners everywhere.
 
 ## Future Development
 
